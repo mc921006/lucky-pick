@@ -1,0 +1,31 @@
+.page { min-height: 100svh; padding: 28px 18px 56px; background: #f4f6fb; }
+.container { width: min(100%, 980px); margin: 0 auto; }
+.backLink { color: #5969d9; font-size: .82rem; font-weight: 700; text-decoration: none; }
+.header { margin: 52px 0 28px; }
+.header h1 { margin: 8px 0 12px; color: #1c2440; font-size: clamp(2rem, 7vw, 3.4rem); letter-spacing: -.06em; line-height: 1.08; }
+.header p:last-child { max-width: 580px; margin: 0; color: #66708b; line-height: 1.7; }
+.eyebrow { margin: 0; color: #6876a4; font-size: .68rem; font-weight: 800; letter-spacing: .14em; }
+.message, .warning { padding: 18px 20px; border-radius: 16px; color: #66708b; background: #fff; line-height: 1.6; }
+.warning { color: #856a35; background: #fff8e8; }
+.grid { display: grid; gap: 18px; }
+.card { overflow: hidden; border: 1px solid #e7eaf2; border-radius: 22px; background: #fff; box-shadow: 0 16px 40px rgba(35, 48, 85, .07); }
+.cardVisual { display: grid; min-height: 190px; place-items: center; background: linear-gradient(135deg, #eef0ff, #f8f8ff); }
+.cardVisual img { width: 100%; height: 190px; object-fit: contain; }
+.cardVisual span { color: #5969d9; font-size: 2rem; font-weight: 900; line-height: .95; text-align: center; }
+.cardContent { padding: 22px; }
+.cardTitle { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.cardTitle h2 { margin: 7px 0 0; color: #1c2440; font-size: 1.25rem; letter-spacing: -.04em; }
+.status { flex: 0 0 auto; padding: 6px 9px; border-radius: 999px; color: #3f4e9d; background: #eef0ff; font-size: .7rem; font-weight: 800; }
+.round { margin: 16px 0 20px; color: #5969d9; font-size: 1.55rem; font-weight: 800; letter-spacing: -.04em; }
+.shipment { padding: 14px; border-radius: 14px; background: #f7f8fc; }
+.shipment > div:first-child { display: flex; justify-content: space-between; color: #778098; font-size: .78rem; }
+.shipment strong { color: #283250; }
+.progress { height: 7px; margin-top: 10px; overflow: hidden; border-radius: 999px; background: #e4e7f2; }
+.progress span { display: block; height: 100%; border-radius: inherit; background: #5969d9; }
+.prizeGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.prize { padding: 13px 11px; border: 1px solid #edf0f6; border-radius: 14px; }
+.prize span, .updated { display: block; color: #9299ad; font-size: .7rem; }
+.prize strong { display: block; margin-top: 7px; color: #283250; font-size: .93rem; }
+.updated { margin: 18px 0 0; }
+.disclaimer { margin: 28px 0 0; color: #9299ad; font-size: .8rem; line-height: 1.6; text-align: center; }
+@media (min-width: 700px) { .page { padding: 42px 28px 72px; } .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; } }

@@ -1,0 +1,31 @@
+.page { min-height: 100svh; padding: 28px 18px 56px; background: #f4f6fb; }
+.container { width: min(100%, 820px); margin: 0 auto; }
+.backLink, .retryLink { color: #5969d9; font-size: .82rem; font-weight: 700; text-decoration: none; }
+.header { margin: 52px 0 28px; }
+.header h1 { margin: 8px 0 12px; color: #1c2440; font-size: clamp(2rem, 7vw, 3.4rem); letter-spacing: -.06em; line-height: 1.08; }
+.header p:last-child { max-width: 540px; margin: 0; color: #66708b; line-height: 1.7; }
+.eyebrow { margin: 0; color: #6876a4; font-size: .68rem; font-weight: 800; letter-spacing: .14em; }
+.summaryCard, .errorCard, .section { border: 1px solid #e7eaf2; border-radius: 22px; background: #fff; box-shadow: 0 16px 40px rgba(35, 48, 85, .07); }
+.summaryCard, .errorCard { padding: 24px; }
+.summaryCard > p:not(.eyebrow) { margin: 12px 0 14px; color: #3e4866; line-height: 1.7; }
+.rangeLabel { color: #9299ad; font-size: .78rem; }
+.errorCard h2 { margin: 0; color: #1c2440; font-size: 1.1rem; }
+.errorCard p { margin: 10px 0 18px; color: #66708b; line-height: 1.6; }
+.section { margin-top: 20px; padding: 24px; }
+.sectionHeading { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+.sectionHeading h2 { margin: 7px 0 0; color: #1c2440; font-size: 1.35rem; letter-spacing: -.04em; }
+.sectionHint { color: #a0a6b8; font-size: .72rem; }
+.selectedList { display: grid; gap: 10px; }
+.selectedItem { display: grid; grid-template-columns: 28px 42px 1fr; align-items: center; gap: 12px; padding: 12px; border-radius: 15px; background: #f7f8fc; }
+.selectedItem h3 { margin: 0; color: #283250; font-size: .92rem; }
+.selectedItem p { margin: 4px 0 0; color: #778098; font-size: .78rem; line-height: 1.5; }
+.rank { color: #a3aabd; font-size: .72rem; font-weight: 800; }
+.numberBall { display: inline-grid; width: 38px; height: 38px; place-items: center; border-radius: 50%; color: #fff; background: #5969d9; font-size: .86rem; font-weight: 800; box-shadow: 0 5px 12px rgba(89, 105, 217, .2); }
+.recommendationGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.recommendationCard { padding: 15px 12px; border: 1px solid #edf0f6; border-radius: 15px; }
+.recommendationCard > span { color: #9299ad; font-size: .68rem; font-weight: 800; letter-spacing: .1em; }
+.numberRow { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+.numberRow .numberBall { width: 29px; height: 29px; font-size: .7rem; }
+.disclaimer { margin: 28px 0 0; color: #9299ad; font-size: .8rem; line-height: 1.6; text-align: center; }
+@media (min-width: 620px) { .page { padding: 42px 28px 72px; } .selectedList { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 760px) { .recommendationGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }

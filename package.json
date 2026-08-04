@@ -3,15 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "WATCHPACK_POLLING=true next dev --port 3007 --webpack",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.112.0",
     "next": "16.3.0",
+    "openai": "^7.4.0",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "sass": "^1.102.0"
   },
   "devDependencies": {
     "@types/node": "^20",
