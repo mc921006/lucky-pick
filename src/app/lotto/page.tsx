@@ -6,6 +6,7 @@ import { isSameKoreaWeek } from "@/lib/cache/korea-week";
 import styles from "./page.module.scss";
 
 export const dynamic = "force-dynamic";
+const MAX_RECOMMENDATION_ATTEMPTS = 3;
 
 type SelectedNumber = { rank: number; number: number; reason: string };
 type RecommendedSet = { numbers: [number, number, number, number, number, number] };
@@ -60,15 +61,87 @@ function isValidCombination(value: unknown): value is RecommendedSet["numbers"] 
   return Array.isArray(value) && value.length === 6 && value.every(isValidNumber) && new Set(value).size === 6;
 }
 
+function hasValidRecommendationSets(selectedNumbers: SelectedNumber[], recommendedSets: RecommendedSet[]): boolean {
+  const topNumbers = new Set(selectedNumbers.map((selected) => selected.number));
+  const combinationKeys = new Set<string>();
+  const usageCounts = new Map(selectedNumbers.map((selected) => [selected.number, 0]));
+
+  for (const set of recommendedSets) {
+    const sortedNumbers = [...set.numbers].sort((a, b) => a - b);
+    const key = sortedNumbers.join("-");
+    if (combinationKeys.has(key) || sortedNumbers.some((number) => !topNumbers.has(number))) return false;
+    combinationKeys.add(key);
+
+    for (const number of sortedNumbers) usageCounts.set(number, (usageCounts.get(number) ?? 0) + 1);
+  }
+
+  for (const count of usageCounts.values()) {
+    // 10 sets x 6 numbers / 10 TOP numbers = exactly 6 uses per number.
+    if (count !== 6) return false;
+  }
+
+  for (let firstIndex = 0; firstIndex < recommendedSets.length; firstIndex += 1) {
+    for (let secondIndex = firstIndex + 1; secondIndex < recommendedSets.length; secondIndex += 1) {
+      const firstSet = new Set(recommendedSets[firstIndex].numbers);
+      const overlap = recommendedSets[secondIndex].numbers.filter((number) => firstSet.has(number)).length;
+      // Four-number overlap is allowed only when necessary; five or more is rejected.
+      if (overlap >= 5) return false;
+    }
+  }
+
+  return true;
+}
+
+function createBalancedFallbackSets(selectedNumbers: SelectedNumber[]): RecommendedSet[] {
+  // Ten cyclic complements of four TOP numbers produce ten unique six-number sets,
+  // use every TOP number exactly six times, and keep pair overlap at four or fewer.
+  const excludedPattern = [0, 1, 2, 4];
+  const topNumbers = selectedNumbers.map((selected) => selected.number);
+
+  return Array.from({ length: 10 }, (_, shift) => {
+    const excluded = new Set(excludedPattern.map((index) => (index + shift) % 10));
+    return {
+      numbers: topNumbers.filter((_, index) => !excluded.has(index)) as RecommendedSet["numbers"],
+    };
+  });
+}
+
+function isValidSelectedNumbers(value: unknown): value is SelectedNumber[] {
+  return Array.isArray(value) && value.length === 10 && value.every((selected, index) => (
+    selected &&
+    selected.rank === index + 1 &&
+    isValidNumber(selected.number) &&
+    typeof selected.reason === "string" &&
+    selected.reason.trim().length > 0
+  )) && new Set(value.map((selected) => selected.number)).size === 10;
+}
+
+function extractAiCandidate(value: unknown): Omit<AiAnalysis, "recommendedSets"> | null {
+  if (!value || typeof value !== "object") return null;
+  const result = value as Partial<AiAnalysis>;
+  if (
+    !Number.isInteger(result.analyzedFromRound) ||
+    !Number.isInteger(result.analyzedToRound) ||
+    !isValidSelectedNumbers(result.selectedNumbers) ||
+    typeof result.summary !== "string" ||
+    result.summary.trim().length === 0
+  ) return null;
+
+  return {
+    analyzedFromRound: result.analyzedFromRound as number,
+    analyzedToRound: result.analyzedToRound as number,
+    selectedNumbers: result.selectedNumbers,
+    summary: result.summary,
+  };
+}
+
 function validateAiAnalysis(value: unknown): AiAnalysis {
   if (!value || typeof value !== "object") throw new Error("AI 분석 결과가 올바른 객체가 아닙니다.");
 
   const result = value as Partial<AiAnalysis>;
   const selectedNumbers = result.selectedNumbers;
   const recommendedSets = result.recommendedSets;
-  const validSelectedNumbers = Array.isArray(selectedNumbers) && selectedNumbers.length === 10 && selectedNumbers.every((selected, index) => (
-    selected && selected.rank === index + 1 && isValidNumber(selected.number) && typeof selected.reason === "string" && selected.reason.trim().length > 0
-  ));
+  const validSelectedNumbers = isValidSelectedNumbers(selectedNumbers);
   const validRecommendedSets = Array.isArray(recommendedSets) && recommendedSets.length === 10 && recommendedSets.every((set) => set && isValidCombination(set.numbers));
 
   if (
@@ -77,6 +150,7 @@ function validateAiAnalysis(value: unknown): AiAnalysis {
     !validSelectedNumbers ||
     new Set(selectedNumbers.map((selected) => selected.number)).size !== 10 ||
     !validRecommendedSets ||
+    !hasValidRecommendationSets(selectedNumbers as SelectedNumber[], recommendedSets as RecommendedSet[]) ||
     typeof result.summary !== "string" ||
     result.summary.trim().length === 0
   ) throw new Error("AI 분석 결과 검증에 실패했습니다.");
@@ -112,23 +186,37 @@ async function loadCachedAnalysis(): Promise<AiAnalysis | null> {
   if (error) throw new Error("저장된 로또 분석 결과를 조회하지 못했습니다.");
   if (!data || !isSameKoreaWeek(data.created_at)) return null;
 
-  return validateAiAnalysis({
-    analyzedFromRound: data.analyzed_from_round,
-    analyzedToRound: data.analyzed_to_round,
-    selectedNumbers: data.selected_numbers,
-    recommendedSets: data.recommended_sets,
-    summary: data.summary,
-  });
+  try {
+    return validateAiAnalysis({
+      analyzedFromRound: data.analyzed_from_round,
+      analyzedToRound: data.analyzed_to_round,
+      selectedNumbers: data.selected_numbers,
+      recommendedSets: data.recommended_sets,
+      summary: data.summary,
+    });
+  } catch {
+    // An older cache may not satisfy the current recommendation constraints.
+    // Treat it as stale so the page can generate and save a corrected analysis.
+    return null;
+  }
 }
 
 async function analyzeWithOpenAI(summary: LottoAnalysisSummary): Promise<AiAnalysis> {
-  const response = await new OpenAI({ apiKey: getRequiredEnv("OPENAI_API_KEY") }).responses.create({
-    model: getRequiredEnv("OPENAI_MODEL"),
-    input: `
+  let lastCandidate: Omit<AiAnalysis, "recommendedSets"> | null = null;
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= MAX_RECOMMENDATION_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await new OpenAI({ apiKey: getRequiredEnv("OPENAI_API_KEY") }).responses.create({
+        model: getRequiredEnv("OPENAI_MODEL"),
+        input: `
 You are analyzing Korean Lotto 6/45 history for entertainment only.
 Use the supplied statistical summary of the latest 100 draws.
 Select exactly 10 notable numbers ranked from 1 to 10 and explain each choice in Korean.
-Create exactly 10 recommendation sets, each with exactly 6 unique numbers from 1 to 45.
+Create exactly 10 recommendation sets from the selected TOP 10 numbers only.
+Each set must contain exactly 6 unique TOP 10 numbers, and all 10 sets must be different.
+No pair of sets may share 5 or more numbers. Minimize pairs that share 4 numbers.
+Across all 10 sets, use each TOP 10 number exactly 6 times.
 Use long-term frequency, recent 10-draw frequency, last appearance, consecutive misses,
 pair co-occurrence, odd/even distribution, number ranges, and draw sum statistics.
 Do not claim that any number is more likely to win. Return only the requested JSON object.
@@ -136,17 +224,29 @@ Do not claim that any number is more likely to win. Return only the requested JS
 Statistical summary:
 ${JSON.stringify(summary)}
 `,
-    text: { format: { type: "json_schema", name: "lotto_analysis", strict: true, schema: aiAnalysisSchema } },
-  });
+        text: { format: { type: "json_schema", name: "lotto_analysis", strict: true, schema: aiAnalysisSchema } },
+      });
 
-  if (!response.output_text) throw new Error("AI 분석 결과가 비어 있습니다.");
+      if (!response.output_text) throw new Error("AI 분석 결과가 비어 있습니다.");
 
-  try {
-    return validateAiAnalysis(JSON.parse(response.output_text));
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith("AI 분석 결과")) throw error;
-    throw new Error("AI 분석 결과가 JSON 형식이 아닙니다.");
+      const parsed = JSON.parse(response.output_text);
+      const candidate = extractAiCandidate(parsed);
+      if (candidate) lastCandidate = candidate;
+      const analysis = validateAiAnalysis(parsed);
+      return analysis;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error("AI 분석에 실패했습니다.");
+    }
   }
+
+  if (lastCandidate) {
+    return {
+      ...lastCandidate,
+      recommendedSets: createBalancedFallbackSets(lastCandidate.selectedNumbers),
+    };
+  }
+
+  throw lastError ?? new Error("AI 분석에 실패했습니다.");
 }
 
 async function saveAnalysis(analysis: AiAnalysis): Promise<void> {
