@@ -1,7 +1,7 @@
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { getKoreaMondayKey } from "@/lib/cache/korea-week";
 import { SPEETTO_PRICES, type CollectedSpeettoProduct, type SpeettoPrice, type SpeettoProduct, type SpeettoPrize } from "./types";
 
-const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const SPEETTO_ENDPOINT = "https://www.dhlottery.co.kr/st/selectSellStInfo.do?srchStGmTypeCd=";
 const SPEETTO_CODES: Record<SpeettoPrice, string> = { 500: "SP500", 1000: "SP1000", 2000: "SP2000" };
 const SOURCE_URLS: Record<SpeettoPrice, string> = {
@@ -211,9 +211,10 @@ export async function loadSpeettoData(): Promise<SpeettoProduct[]> {
 }
 
 export function isSpeettoCacheFresh(products: SpeettoProduct[]): boolean {
+  const currentWeek = getKoreaMondayKey();
   return SPEETTO_PRICES.every((price) => {
     const product = products.find((item) => item.price === price);
-    return Boolean(product && Date.now() - new Date(product.updated_at).getTime() < CACHE_MAX_AGE_MS);
+    return Boolean(product && getKoreaMondayKey(product.updated_at) === currentWeek);
   });
 }
 

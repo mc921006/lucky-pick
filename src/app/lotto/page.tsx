@@ -2,10 +2,10 @@ import Link from "next/link";
 import OpenAI from "openai";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { createLottoAnalysisSummary, type LottoAnalysisSummary, type LottoDraw } from "@/lib/lotto/analyze";
+import { isSameKoreaWeek } from "@/lib/cache/korea-week";
 import styles from "./page.module.scss";
 
 export const dynamic = "force-dynamic";
-const ANALYSIS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 type SelectedNumber = { rank: number; number: number; reason: string };
 type RecommendedSet = { numbers: [number, number, number, number, number, number] };
@@ -110,7 +110,7 @@ async function loadCachedAnalysis(): Promise<AiAnalysis | null> {
     .maybeSingle();
 
   if (error) throw new Error("저장된 로또 분석 결과를 조회하지 못했습니다.");
-  if (!data || Date.now() - new Date(data.created_at).getTime() >= ANALYSIS_CACHE_MAX_AGE_MS) return null;
+  if (!data || !isSameKoreaWeek(data.created_at)) return null;
 
   return validateAiAnalysis({
     analyzedFromRound: data.analyzed_from_round,

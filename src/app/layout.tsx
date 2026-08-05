@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import PwaRegister from "@/components/pwa-register";
+import WeeklyLottoSync from "@/components/weekly-lotto-sync";
 import "./globals.scss";
 
 export const metadata: Metadata = {
@@ -27,6 +28,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html lang="ko">
       <body>
         <PwaRegister />
+        <WeeklyLottoSync />
         {children}
       </body>
     </html>
