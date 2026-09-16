@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { getLatestCompletedDraw, getRoundForDrawDate } from "@/lib/lotto/draw-calendar";
 
 export const runtime = "nodejs";
 
@@ -60,6 +61,7 @@ function validateDraw(value: unknown): LottoSearchResult {
   if (
     !isIntegerInRange(draw.round, 1, MAX_ROUND) ||
     !isValidDrawDate(draw.draw_date) ||
+    getRoundForDrawDate(draw.draw_date) !== draw.round ||
     !Array.isArray(numbers) ||
     numbers.length !== 6 ||
     !numbers.every((number) => isIntegerInRange(number, 1, 45)) ||
@@ -124,18 +126,19 @@ async function askOpenAI(prompt: string): Promise<LottoSearchResult[]> {
 }
 
 async function fetchLatestDraw(): Promise<LottoSearchResult> {
+  const expectedDraw = getLatestCompletedDraw();
   const results = await askOpenAI(`
-Use web search to find the latest completed Korean Lotto 6/45 winning result.
-Prefer a current, reliable source and cross-check the draw number, draw date,
-six winning numbers, and bonus number. Do not use memory alone.
+Use web search to find the Korean Lotto 6/45 winning result for exactly round ${expectedDraw.round},
+draw date ${expectedDraw.date}. Prefer the official Donghaeng Lottery result page and cross-check
+the round, draw date, six winning numbers, and bonus number. Do not use memory alone.
 
 Return JSON only as an array containing exactly one object for the latest
 completed draw. The required shape is:
 [{"round":number,"draw_date":"YYYY-MM-DD","numbers":[n1,n2,n3,n4,n5,n6],"bonus":number}]
 `);
 
-  if (results.length !== 1) {
-    throw new InvalidOpenAIResponseError("OpenAI did not return exactly one latest draw.");
+  if (results.length !== 1 || results[0].round !== expectedDraw.round || results[0].draw_date !== expectedDraw.date) {
+    throw new InvalidOpenAIResponseError("OpenAI did not return the expected latest completed draw.");
   }
 
   return results[0];
@@ -211,12 +214,12 @@ export async function POST() {
   }
 
   const supabase = createServerSupabaseClient();
-  let databaseLatestRound: number | null;
+  let databaseLatest: { round: number; draw_date: string } | null;
 
   try {
     const { data, error } = await supabase
       .from("lotto_draws")
-      .select("round")
+      .select("round, draw_date")
       .order("round", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -226,9 +229,9 @@ export async function POST() {
     }
 
     if (data === null) {
-      databaseLatestRound = null;
-    } else if (isIntegerInRange(data.round, 1, MAX_ROUND)) {
-      databaseLatestRound = data.round;
+      databaseLatest = null;
+    } else if (isIntegerInRange(data.round, 1, MAX_ROUND) && isValidDrawDate(data.draw_date)) {
+      databaseLatest = { round: data.round, draw_date: data.draw_date };
     } else {
       throw new SupabaseLatestRoundError("Invalid database round");
     }
@@ -250,20 +253,24 @@ export async function POST() {
 
   const latestRound = latestDraw.round;
 
-  if (databaseLatestRound !== null && databaseLatestRound >= latestRound) {
+  if (databaseLatest && databaseLatest.round > latestRound) {
+    return errorResponse("DRAW_DATA_MISMATCH", "저장된 로또 회차가 최신 공식 회차보다 앞서 있어 확인이 필요합니다.", 500);
+  }
+
+  if (databaseLatest?.round === latestRound && databaseLatest.draw_date === latestDraw.draw_date) {
     return NextResponse.json({
       success: true,
       mode: "up-to-date",
       latestRound,
-      databaseLatestRound,
+      databaseLatestRound: databaseLatest.round,
       savedCount: 0,
       message: "이미 최신 데이터입니다.",
     });
   }
 
-  const startRound = databaseLatestRound === null
+  const startRound = databaseLatest === null
     ? Math.max(1, latestRound - INITIAL_REQUESTED_COUNT + 1)
-    : databaseLatestRound + 1;
+    : databaseLatest.round === latestRound ? latestRound : databaseLatest.round + 1;
   let draws: LottoSearchResult[];
 
   try {
@@ -290,7 +297,7 @@ export async function POST() {
 
   return NextResponse.json({
     success: true,
-    mode: databaseLatestRound === null ? "initial" : "incremental",
+    mode: databaseLatest === null ? "initial" : "incremental",
     latestRound,
     startRound,
     savedCount: draws.length,

@@ -3,13 +3,15 @@ import OpenAI from "openai";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { createLottoAnalysisSummary, type LottoAnalysisSummary, type LottoDraw } from "@/lib/lotto/analyze";
 import { isSameKoreaWeek } from "@/lib/cache/korea-week";
+import { getLatestCompletedDraw } from "@/lib/lotto/draw-calendar";
+import { evaluateLottoPredictions, type LottoPredictionEvaluation, type StoredLottoPrediction } from "@/lib/lotto/evaluation";
+import { createBalancedFallbackSets, hasValidRecommendationSets, type RecommendedSet } from "@/lib/lotto/recommendations";
 import styles from "./page.module.scss";
 
 export const dynamic = "force-dynamic";
 const MAX_RECOMMENDATION_ATTEMPTS = 3;
 
 type SelectedNumber = { rank: number; number: number; reason: string };
-type RecommendedSet = { numbers: [number, number, number, number, number, number] };
 type AiAnalysis = {
   analyzedFromRound: number;
   analyzedToRound: number;
@@ -61,51 +63,6 @@ function isValidCombination(value: unknown): value is RecommendedSet["numbers"] 
   return Array.isArray(value) && value.length === 6 && value.every(isValidNumber) && new Set(value).size === 6;
 }
 
-function hasValidRecommendationSets(selectedNumbers: SelectedNumber[], recommendedSets: RecommendedSet[]): boolean {
-  const topNumbers = new Set(selectedNumbers.map((selected) => selected.number));
-  const combinationKeys = new Set<string>();
-  const usageCounts = new Map(selectedNumbers.map((selected) => [selected.number, 0]));
-
-  for (const set of recommendedSets) {
-    const sortedNumbers = [...set.numbers].sort((a, b) => a - b);
-    const key = sortedNumbers.join("-");
-    if (combinationKeys.has(key) || sortedNumbers.some((number) => !topNumbers.has(number))) return false;
-    combinationKeys.add(key);
-
-    for (const number of sortedNumbers) usageCounts.set(number, (usageCounts.get(number) ?? 0) + 1);
-  }
-
-  for (const count of usageCounts.values()) {
-    // 10 sets x 6 numbers / 10 TOP numbers = exactly 6 uses per number.
-    if (count !== 6) return false;
-  }
-
-  for (let firstIndex = 0; firstIndex < recommendedSets.length; firstIndex += 1) {
-    for (let secondIndex = firstIndex + 1; secondIndex < recommendedSets.length; secondIndex += 1) {
-      const firstSet = new Set(recommendedSets[firstIndex].numbers);
-      const overlap = recommendedSets[secondIndex].numbers.filter((number) => firstSet.has(number)).length;
-      // Four-number overlap is allowed only when necessary; five or more is rejected.
-      if (overlap >= 5) return false;
-    }
-  }
-
-  return true;
-}
-
-function createBalancedFallbackSets(selectedNumbers: SelectedNumber[]): RecommendedSet[] {
-  // Ten cyclic complements of four TOP numbers produce ten unique six-number sets,
-  // use every TOP number exactly six times, and keep pair overlap at four or fewer.
-  const excludedPattern = [0, 1, 2, 4];
-  const topNumbers = selectedNumbers.map((selected) => selected.number);
-
-  return Array.from({ length: 10 }, (_, shift) => {
-    const excluded = new Set(excludedPattern.map((index) => (index + shift) % 10));
-    return {
-      numbers: topNumbers.filter((_, index) => !excluded.has(index)) as RecommendedSet["numbers"],
-    };
-  });
-}
-
 function isValidSelectedNumbers(value: unknown): value is SelectedNumber[] {
   return Array.isArray(value) && value.length === 10 && value.every((selected, index) => (
     selected &&
@@ -150,7 +107,7 @@ function validateAiAnalysis(value: unknown): AiAnalysis {
     !validSelectedNumbers ||
     new Set(selectedNumbers.map((selected) => selected.number)).size !== 10 ||
     !validRecommendedSets ||
-    !hasValidRecommendationSets(selectedNumbers as SelectedNumber[], recommendedSets as RecommendedSet[]) ||
+    !hasValidRecommendationSets(recommendedSets as RecommendedSet[]) ||
     typeof result.summary !== "string" ||
     result.summary.trim().length === 0
   ) throw new Error("AI 분석 결과 검증에 실패했습니다.");
@@ -175,7 +132,7 @@ async function loadRecentDraws(): Promise<LottoDraw[]> {
   return (data ?? []) as LottoDraw[];
 }
 
-async function loadCachedAnalysis(): Promise<AiAnalysis | null> {
+async function loadCachedAnalysis(latestDrawRound: number | null): Promise<AiAnalysis | null> {
   const { data, error } = await createServerSupabaseClient()
     .from("lotto_analysis_results")
     .select("analyzed_from_round, analyzed_to_round, selected_numbers, recommended_sets, summary, created_at")
@@ -184,7 +141,7 @@ async function loadCachedAnalysis(): Promise<AiAnalysis | null> {
     .maybeSingle();
 
   if (error) throw new Error("저장된 로또 분석 결과를 조회하지 못했습니다.");
-  if (!data || !isSameKoreaWeek(data.created_at)) return null;
+  if (!data || latestDrawRound === null || data.analyzed_to_round !== latestDrawRound || !isSameKoreaWeek(data.created_at)) return null;
 
   try {
     return validateAiAnalysis({
@@ -201,7 +158,21 @@ async function loadCachedAnalysis(): Promise<AiAnalysis | null> {
   }
 }
 
-async function analyzeWithOpenAI(summary: LottoAnalysisSummary): Promise<AiAnalysis> {
+async function loadPredictionEvaluation(draws: LottoDraw[]): Promise<LottoPredictionEvaluation> {
+  const { data, error } = await createServerSupabaseClient()
+    .from("lotto_analysis_results")
+    .select("analyzed_to_round, recommended_sets, created_at")
+    .order("created_at", { ascending: false })
+    .limit(100);
+
+  if (error) throw new Error("추천 결과 이력을 조회하지 못했습니다.");
+  return evaluateLottoPredictions((data ?? []) as StoredLottoPrediction[], draws);
+}
+
+async function analyzeWithOpenAI(
+  summary: LottoAnalysisSummary,
+  evaluation: LottoPredictionEvaluation,
+): Promise<AiAnalysis> {
   let lastCandidate: Omit<AiAnalysis, "recommendedSets"> | null = null;
   let lastError: Error | null = null;
 
@@ -212,17 +183,30 @@ async function analyzeWithOpenAI(summary: LottoAnalysisSummary): Promise<AiAnaly
         input: `
 You are analyzing Korean Lotto 6/45 history for entertainment only.
 Use the supplied statistical summary of the latest 100 draws.
+Use the prior walk-forward evaluation below as feedback from earlier recommendations.
+Treat small samples as noise; do not chase individual past winning numbers or claim a lasting advantage.
 Select exactly 10 notable numbers ranked from 1 to 10 and explain each choice in Korean.
-Create exactly 10 recommendation sets from the selected TOP 10 numbers only.
-Each set must contain exactly 6 unique TOP 10 numbers, and all 10 sets must be different.
-No pair of sets may share 5 or more numbers. Minimize pairs that share 4 numbers.
-Across all 10 sets, use each TOP 10 number exactly 6 times.
+Create exactly 10 different recommendation sets using the full number range 1 to 45.
+Each set must contain exactly 6 unique numbers. Across the 10 sets, cover at least 30 different numbers.
+Any two sets may share at most 2 numbers. Do not restrict recommendation sets to the selected TOP 10.
+Use the historical statistics only as a light reference; prioritize variety across the 10 sets.
 Use long-term frequency, recent 10-draw frequency, last appearance, consecutive misses,
 pair co-occurrence, odd/even distribution, number ranges, and draw sum statistics.
-Do not claim that any number is more likely to win. Return only the requested JSON object.
+Describe past frequencies only. Never call a number reliable, due, or more likely to win.
+Do not claim that any number or combination is more likely to win. Return only the requested JSON object.
 
 Statistical summary:
 ${JSON.stringify(summary)}
+
+Prior recommendation evaluation:
+${JSON.stringify({
+  forecastCount: evaluation.forecastCount,
+  averageMatchesPerSet: evaluation.averageMatchesPerSet,
+  randomAverageMatchesPerSet: evaluation.randomAverageMatchesPerSet,
+  threeOrMoreRate: evaluation.threeOrMoreRate,
+  randomThreeOrMoreRate: evaluation.randomThreeOrMoreRate,
+  recentRounds: evaluation.rounds.slice(-10),
+})}
 `,
         text: { format: { type: "json_schema", name: "lotto_analysis", strict: true, schema: aiAnalysisSchema } },
       });
@@ -231,8 +215,16 @@ ${JSON.stringify(summary)}
 
       const parsed = JSON.parse(response.output_text);
       const candidate = extractAiCandidate(parsed);
-      if (candidate) lastCandidate = candidate;
+      if (
+        candidate &&
+        candidate.analyzedFromRound === summary.analyzedFromRound &&
+        candidate.analyzedToRound === summary.analyzedToRound
+      ) lastCandidate = candidate;
       const analysis = validateAiAnalysis(parsed);
+      if (
+        analysis.analyzedFromRound !== summary.analyzedFromRound ||
+        analysis.analyzedToRound !== summary.analyzedToRound
+      ) throw new Error("AI 분석 회차가 실제 분석 데이터와 일치하지 않습니다.");
       return analysis;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error("AI 분석에 실패했습니다.");
@@ -242,7 +234,7 @@ ${JSON.stringify(summary)}
   if (lastCandidate) {
     return {
       ...lastCandidate,
-      recommendedSets: createBalancedFallbackSets(lastCandidate.selectedNumbers),
+      recommendedSets: createBalancedFallbackSets(lastCandidate.analyzedToRound),
     };
   }
 
@@ -275,16 +267,23 @@ export default async function LottoPage() {
   let analysis: AiAnalysis | null = null;
   let errorMessage = "";
   let analyzedDrawCount = 0;
+  let evaluation: LottoPredictionEvaluation | null = null;
 
   try {
-    analysis = await loadCachedAnalysis();
+    const draws = await loadRecentDraws();
+    analyzedDrawCount = draws.length;
+    const expectedLatestDraw = getLatestCompletedDraw();
+    const latestDraw = draws[0];
 
-    if (!analysis) {
-      const draws = await loadRecentDraws();
-      analyzedDrawCount = draws.length;
-      if (draws.length === 0) errorMessage = "분석할 로또 데이터가 없습니다.";
-      else {
-        analysis = await analyzeWithOpenAI(createLottoAnalysisSummary(draws));
+    if (!latestDraw) {
+      errorMessage = "분석할 로또 데이터가 없습니다.";
+    } else if (latestDraw.round !== expectedLatestDraw.round || latestDraw.draw_date !== expectedLatestDraw.date) {
+      errorMessage = `당첨 데이터가 최신 회차(${expectedLatestDraw.round}회)까지 동기화되지 않아 추천을 갱신하지 않았습니다. 잠시 후 다시 시도해 주세요.`;
+    } else {
+      evaluation = await loadPredictionEvaluation(draws);
+      analysis = await loadCachedAnalysis(latestDraw.round);
+      if (!analysis) {
+        analysis = await analyzeWithOpenAI(createLottoAnalysisSummary(draws), evaluation);
         await saveAnalysis(analysis);
       }
     }
@@ -306,7 +305,7 @@ export default async function LottoPage() {
           <section className={styles.errorCard} role="alert">
             <h2>분석을 완료하지 못했습니다</h2>
             <p>{errorMessage}</p>
-            <Link href="/lotto" className={styles.retryLink}>다시 시도</Link>
+            <a href="/lotto" className={styles.retryLink}>다시 시도</a>
           </section>
         ) : analysis ? (
           <>
@@ -335,6 +334,7 @@ export default async function LottoPage() {
             <section className={styles.section} aria-labelledby="recommendation-title">
               <div className={styles.sectionHeading}>
                 <div><p className={styles.eyebrow}>10 SETS</p><h2 id="recommendation-title">추천 번호 조합</h2></div>
+                <span className={styles.sectionHint}>1~45 전체에서 분산 구성</span>
               </div>
               <div className={styles.recommendationGrid}>
                 {analysis.recommendedSets.map((set, index) => (
@@ -344,6 +344,39 @@ export default async function LottoPage() {
                   </article>
                 ))}
               </div>
+            </section>
+
+            <section className={styles.section} aria-labelledby="evaluation-title">
+              <div className={styles.sectionHeading}>
+                <div><p className={styles.eyebrow}>WALK-FORWARD CHECK</p><h2 id="evaluation-title">추천 누적 검증</h2></div>
+                <span className={styles.sectionHint}>추첨 전에 만든 추천만 집계</span>
+              </div>
+              {evaluation && evaluation.forecastCount > 0 ? (
+                <>
+                  <p className={styles.evaluationText}>
+                    {evaluation.forecastCount}회차, {evaluation.setCount}조합 검증 결과 조합당 평균 {evaluation.averageMatchesPerSet.toFixed(2)}개가 일치했습니다.
+                    무작위 조합의 이론적 평균은 {evaluation.randomAverageMatchesPerSet.toFixed(2)}개입니다.
+                  </p>
+                  <p className={styles.evaluationText}>
+                    3개 이상 일치한 조합은 {evaluation.setsWithThreeOrMore}개({(evaluation.threeOrMoreRate * 100).toFixed(1)}%)였고,
+                    무작위 조합의 이론적 비율은 {(evaluation.randomThreeOrMoreRate * 100).toFixed(1)}%입니다.
+                  </p>
+                  <div className={styles.evaluationRounds}>
+                    {evaluation.rounds.slice(-5).reverse().map((round) => (
+                      <span key={round.round}>
+                        {round.round}회 · 최고 {round.bestSetMatches}개 · 3개 이상 {round.setsWithThreeOrMore}조합
+                      </span>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <p className={styles.evaluationText}>
+                  아직 추첨 전에 저장된 추천 기록이 없습니다. 이번 추천부터 다음 회차 결과와 대조해 쌓고, 무작위 조합 기준과 비교합니다.
+                </p>
+              )}
+              <p className={styles.evaluationNote}>
+                이 기록은 다음 분석의 참고 입력으로 전달됩니다. 로또 추첨은 독립적이므로 과거 성과가 다음 회차의 확률 상승을 뜻하지는 않습니다.
+              </p>
             </section>
           </>
         ) : null}

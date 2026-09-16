@@ -26,6 +26,10 @@
 .recommendationCard > span { color: #9299ad; font-size: .68rem; font-weight: 800; letter-spacing: .1em; }
 .numberRow { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
 .numberRow .numberBall { width: 29px; height: 29px; font-size: .7rem; }
+.evaluationText { margin: 0 0 10px; color: #3e4866; font-size: .88rem; line-height: 1.7; }
+.evaluationRounds { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 16px; }
+.evaluationRounds span { padding: 7px 10px; border-radius: 10px; color: #596581; background: #f4f6fb; font-size: .72rem; }
+.evaluationNote { margin: 16px 0 0; color: #9299ad; font-size: .76rem; line-height: 1.6; }
 .disclaimer { margin: 28px 0 0; color: #9299ad; font-size: .8rem; line-height: 1.6; text-align: center; }
 @media (min-width: 620px) { .page { padding: 42px 28px 72px; } .selectedList { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (min-width: 760px) { .recommendationGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }

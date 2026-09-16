@@ -1,20 +1,22 @@
 "use client";
 
 import { useEffect } from "react";
-import { isKoreaMonday } from "@/lib/cache/korea-week";
+import { useRouter } from "next/navigation";
 
 export default function WeeklyLottoSync() {
-  useEffect(() => {
-    if (!isKoreaMonday()) return;
+  const router = useRouter();
 
+  useEffect(() => {
     fetch("/api/admin/lotto/weekly-sync", { method: "POST" })
-      .then((response) => {
+      .then(async (response) => {
         if (!response.ok) throw new Error("weekly lotto sync failed");
+        const result = await response.json();
+        if (result.mode === "initial" || result.mode === "incremental") router.refresh();
       })
       .catch(() => {
-        // Retry on the next page visit if the weekly sync could not complete.
+        // Retry on a later page visit if the draw data could not be synchronized.
       });
-  }, []);
+  }, [router]);
 
   return null;
 }
